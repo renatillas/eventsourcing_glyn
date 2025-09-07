@@ -186,10 +186,20 @@ let #(distributed_store, glyn_spec) = glyn_store.supervised(
 - **glyn**: >= 2.0.0
 - **OTP**: Erlang/OTP 25+
 
-## Development
+## Testing
+
+This library includes comprehensive test coverage with 20+ test cases covering:
+
+- Core functionality and configuration
+- Decoder functions with error handling
+- Proxy function delegation
+- PubSub event distribution
+- Query actor lifecycle management
+- Transaction handling
+- Integration testing with example domain
 
 ```sh
-gleam test  # Run the tests
+gleam test  # Run the full test suite
 gleam build # Build the project
 ```
 

@@ -1,7 +1,7 @@
 name = "eventsourcing_glyn"
 version = "1.0.0"
 
-description = "Distributed event store using Glyn PubSub/Registry for Gleam Event Sourcing"
+description = "A distributed event sourcing library that enhances existing event stores with Glyn PubSub and Registry capabilities for distributed query actors, event broadcasting, and fault-tolerant command routing"
 licences = ["MIT"]
 repository = { type = "github", user = "renatillas", repo = "eventsourcing_glyn" }
 
