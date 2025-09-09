@@ -22,7 +22,7 @@ The example consists of three services:
 To run each service individually, you need to set the proper Erlang flags for distributed communication:
 
 ```bash
-# Terminal 1 - Start Inventory Service  
+# Terminal 1 - Start Inventory Service
 cd examples/distributed_nodes/inventory_service
 ERL_FLAGS="-sname inventory@localhost -setcookie eventsourcing" gleam run
 
@@ -47,4 +47,3 @@ Once all services are running, they will:
 1. **Auto-discover** each other through Erlang's distributed node system
 2. **Publish/Subscribe** to events across the cluster using Glyn
 3. **Coordinate** business operations (e.g., order processing with inventory checks)
-

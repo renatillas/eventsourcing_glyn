@@ -1,3 +1,6 @@
+import eventsourcing
+import eventsourcing/memory_store
+import eventsourcing_glyn
 import gleam/erlang/atom
 import gleam/erlang/node
 import gleam/erlang/process
@@ -5,11 +8,6 @@ import gleam/io
 import gleam/list
 import gleam/option.{None}
 import gleam/otp/static_supervisor
-import glyn/pubsub
-
-import eventsourcing
-import eventsourcing/memory_store
-import eventsourcing_glyn
 import order_service/order
 
 pub type InventoryCommand {
@@ -17,7 +15,7 @@ pub type InventoryCommand {
 }
 
 pub fn inventory_coordination_query(
-  pubsub: pubsub.PubSub(eventsourcing.QueryMessage(order.Event)),
+  pubsub,
 ) -> fn(String, List(eventsourcing.EventEnvelop(order.Event))) -> Nil {
   fn(_: String, events: List(eventsourcing.EventEnvelop(order.Event))) -> Nil {
     list.each(events, fn(event) {
@@ -29,7 +27,7 @@ pub fn inventory_coordination_query(
             <> ", requesting inventory reservation",
           )
           let assert Ok(1) =
-            pubsub.publish(
+            eventsourcing_glyn.publish(
               pubsub,
               "inventory",
               eventsourcing.ProcessEvents(event.aggregate_id, events: [
@@ -82,9 +80,7 @@ pub fn main() {
   let queries = [
     #(
       inventory_query_name,
-      inventory_coordination_query(
-        distributed_store.eventstore |> eventsourcing_glyn.get_pubsub(),
-      ),
+      inventory_coordination_query(distributed_store.eventstore),
     ),
   ]
 
@@ -121,7 +117,7 @@ pub fn main() {
   // Demo: Create a sample order
   create_demo_order(order_service_name)
 
-  eventsourcing_glyn.get_subscribers(distributed_store.eventstore)
+  eventsourcing_glyn.subscribers(distributed_store.eventstore)
   // Keep the service running
   process.sleep_forever()
 }

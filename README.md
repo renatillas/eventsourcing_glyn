@@ -1,203 +1,208 @@
 # eventsourcing_glyn
 
-<div align="center">
-  ✨ <strong>Distributed Event Sourcing with Glyn PubSub/Registry</strong> ✨
-</div>
-
-<div align="center">
-  A Gleam library that enhances event sourcing systems with distributed capabilities using Glyn's type-safe PubSub and Registry features.
-</div>
-
-<br />
-
 [![Package Version](https://img.shields.io/hexpm/v/eventsourcing_glyn)](https://hex.pm/packages/eventsourcing_glyn)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/eventsourcing_glyn/)
 
-## Overview
+A distributed event sourcing library for Gleam that enhances existing event stores with [Glyn](https://hex.pm/packages/glyn) PubSub and Registry capabilities for distributed query actors, event broadcasting, and fault-tolerant command routing.
 
-`eventsourcing_glyn` is an integration package that wraps existing event stores with [Glyn](https://github.com/mbuhot/glyn)'s distributed messaging capabilities. It enables:
+## Features
 
-- **Distributed Query Processing**: Query actors can run on different nodes in a cluster
-- **Event Broadcasting**: Events are automatically distributed to all subscribers via PubSub
-- **Command Routing**: Aggregate commands can be routed to specific nodes via Registry  
-- **Fault Tolerance**: Node failures don't affect the entire query processing pipeline
+- **🔄 Distributed PubSub**: Query actors automatically subscribe to events across multiple nodes
+- **🛡️ Fault Tolerance**: Built-in OTP supervision for all distributed components  
+- **🔌 Store Agnostic**: Works with any underlying event store (memory, PostgreSQL, etc.)
+- **⚡ Type Safety**: Full Gleam type safety with generic event and entity types
+- **📡 Event Broadcasting**: Automatic distribution of committed events to all subscribers
+- **🎯 Zero Configuration**: Minimal setup required to add distributed capabilities
 
 ## Installation
+
+Add `eventsourcing_glyn` to your Gleam project:
 
 ```sh
 gleam add eventsourcing_glyn
 ```
 
-You'll also need the core `eventsourcing` package and an underlying event store:
-
-```sh
-gleam add eventsourcing
-gleam add eventsourcing_postgres  # or eventsourcing_inmemory, etc.
-```
-
 ## Quick Start
 
 ```gleam
-import eventsourcing
-import eventsourcing/postgres_store
-import eventsourcing/glyn_store
+import eventsourcing_glyn
+import eventsourcing/memory_store
 import gleam/otp/static_supervisor
-import gleam/erlang/process
 
-pub fn main() {
-  // 1. Set up underlying event store (PostgreSQL in this example)
-  let assert Ok(#(postgres_store, postgres_spec)) = postgres_store.supervised(
-    host: "localhost",
-    database: "eventstore",
-    // ... other postgres config
-  )
+// 1. Set up your underlying event store (memory, postgres, etc.)
+let #(underlying_store, memory_spec) = memory_store.supervised(
+  events_name,
+  snapshots_name, 
+  static_supervisor.OneForOne
+)
 
-  // 2. Configure Glyn for distributed capabilities
-  let config = glyn_store.GlynConfig(
-    pubsub_topic: "bank_events",
-    registry_scope: "bank_aggregates"
-  )
+// 2. Configure Glyn for distributed coordination
+let config = eventsourcing_glyn.GlynConfig(
+  pubsub_scope: "bank_events",
+  pubsub_group: "bank_services" 
+)
 
-  // 3. Define query actors
-  let balance_query_name = process.new_name("balance_query")
-  let queries = [
-    #(balance_query_name, balance_query_function),
-  ]
+// 3. Define query actors that will receive events
+let queries = [
+  #("balance_query", balance_query_function),
+  #("audit_query", audit_query_function),
+]
 
-  // 4. Wrap PostgreSQL store with Glyn distributed capabilities
-  let assert Ok(#(distributed_store, glyn_spec)) = glyn_store.supervised(
+// 4. Create the distributed event store
+let assert Ok(#(glyn_eventstore, glyn_spec)) = 
+  eventsourcing_glyn.supervised(
     config,
-    postgres_store,
-    queries
+    underlying_store,
+    queries,
+    your_event_decoder()
   )
 
-  // 5. Create main event sourcing system
-  let eventsourcing_name = process.new_name("eventsourcing_actor")
-  let assert Ok(eventsourcing_spec) = eventsourcing.supervised(
-    name: eventsourcing_name,
-    eventstore: distributed_store,
-    handle: handle_commands,
-    apply: apply_events,
-    empty_state: UnopenedBankAccount,
-    queries: [],  // Queries handled by Glyn
-    snapshot_config: None
-  )
+// 5. Start supervision tree
+let assert Ok(_supervisor) =
+  static_supervisor.new(static_supervisor.OneForOne)
+  |> static_supervisor.add(memory_spec)  
+  |> static_supervisor.add(glyn_spec)
+  |> static_supervisor.start()
 
-  // 6. Start supervision tree
-  let assert Ok(_supervisor) = static_supervisor.new(static_supervisor.OneForOne)
-    |> static_supervisor.add(postgres_spec)      // PostgreSQL storage
-    |> static_supervisor.add(glyn_spec)          // Glyn query actors
-    |> static_supervisor.add(eventsourcing_spec) // Event sourcing system
-    |> static_supervisor.start()
-}
+// 6. Use the event store normally - events are automatically distributed!
+eventsourcing.execute(command_processor, aggregate_id, command)
 ```
 
-## Features
+## Architecture
 
-### 🌐 **Distributed Query Processing**
-- Query actors automatically subscribe to Glyn PubSub topics
-- Events are broadcast to all subscribers across cluster nodes
-- Each query actor processes events independently
+The library wraps your existing event store with a `GlynStore` that adds distributed capabilities:
 
-### 🎯 **Command Routing** 
-- Commands can be routed to specific aggregates using Glyn Registry
-- Load balancing across nodes for better performance
-- Automatic failover if aggregate actors become unavailable
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Service A     │    │   Service B     │    │   Service C     │
+│                 │    │                 │    │                 │
+│ ┌─────────────┐ │    │ ┌─────────────┐ │    │ ┌─────────────┐ │
+│ │ Query Actor │ │    │ │ Query Actor │ │    │ │ Query Actor │ │
+│ └─────────────┘ │    │ └─────────────┘ │    │ └─────────────┘ │
+│        │        │    │        │        │    │        │        │
+└────────┼────────┘    └────────┼────────┘    └────────┼────────┘
+         │                      │                      │
+    ┌────┴──────────────────────┴──────────────────────┴────┐
+    │               Glyn PubSub Network                     │
+    │          (Automatic Event Distribution)               │
+    └───────────────────────────────────────────────────────┘
+```
 
-### 🔧 **Event Store Agnostic**
-- Works with any existing `eventsourcing.EventStore` implementation
-- No changes needed to your existing event sourcing logic
-- Composable with memory, PostgreSQL, SQLite, or custom stores
+When events are committed to any service, they're automatically broadcast to all query actors across all connected nodes.
 
-### 🛡️ **Fault Tolerance**
-- Node failures don't crash the entire system
-- Query processing continues on remaining nodes
-- Automatic reconnection and rebalancing
+## Distributed Nodes Example
 
-## Configuration
+The `examples/distributed_nodes` directory demonstrates running multiple services:
 
-The `GlynConfig` type configures the distributed messaging:
+```bash
+# Terminal 1 - Inventory Service
+cd examples/distributed_nodes/inventory_service
+ERL_FLAGS="-sname inventory@localhost -setcookie eventsourcing" gleam run
+
+# Terminal 2 - Order Service  
+cd examples/distributed_nodes/order_service
+ERL_FLAGS="-sname order@localhost -setcookie eventsourcing" gleam run
+```
+
+Or use the startup script:
+
+```bash
+./distributed_start.sh
+```
+
+See the [distributed nodes README](examples/distributed_nodes/README.md) for complete setup instructions.
+
+## API Documentation
+
+### Types
+
+#### `GlynStore(underlying_store, entity, command, event, error, transaction_handle)`
+
+An opaque type that wraps an existing event store with Glyn distributed capabilities.
+
+#### `GlynConfig`
+
+Configuration for the distributed event sourcing:
 
 ```gleam
 pub type GlynConfig {
   GlynConfig(
-    pubsub_topic: String,    // PubSub topic for event broadcasting
-    registry_scope: String,  // Registry scope for command routing
+    pubsub_scope: String,  // Unique scope for PubSub topics
+    pubsub_group: String   // Group name for subscriber discovery
   )
 }
 ```
 
-## Query Functions
+### Functions
 
-Query functions have the same signature as in core `eventsourcing`:
+#### `supervised`
+
+Creates a supervised Glyn-enhanced event store:
 
 ```gleam
-pub type Query(event) = fn(AggregateId, List(EventEnvelop(event))) -> Nil
+pub fn supervised(
+  config: GlynConfig,
+  underlying_store: eventsourcing.EventStore(...),
+  queries: List(#(process.Name(QueryMessage(event)), Query(event))),
+  event_decoder: decode.Decoder(event),
+) -> Result(
+  #(
+    eventsourcing.EventStore(...),
+    supervision.ChildSpecification(static_supervisor.Supervisor)
+  ),
+  String
+)
+```
 
-// Example query function
-fn balance_query_function(
-  aggregate_id: String, 
-  events: List(EventEnvelop(BankAccountEvent))
-) -> Nil {
-  // Update read models, send notifications, etc.
-  events
-  |> list.each(fn(event) {
-    case event.payload {
-      CustomerDepositedCash(amount, new_balance) -> {
-        update_balance_view(aggregate_id, new_balance)
-      }
-      // ... handle other events
+**Important Note about Event Decoders:**
+The `event_decoder` parameter must be designed to decode Erlang dynamic data structures, not JSON. When events are distributed via Glyn PubSub, they are serialized using Erlang's native term format. Your decoder should use `gleam/dynamic/decode` functions to handle Erlang tuples and atoms.
+
+Example event decoder for Erlang data:
+
+```gleam
+import gleam/dynamic/decode
+import gleam/erlang/atom
+
+pub fn event_decoder() -> decode.Decoder(MyEvent) {
+  use tag <- decode.field(0, atom.decoder())
+  case atom.to_string(tag) {
+    "user_created" -> {
+      use id <- decode.field(1, decode.string)
+      use name <- decode.field(2, decode.string)
+      decode.success(UserCreated(id, name))
     }
-  })
+    "user_updated" -> {
+      use id <- decode.field(1, decode.string)
+      use new_name <- decode.field(2, decode.string)
+      decode.success(UserUpdated(id, new_name))
+    }
+    _ -> decode.failure(UserCreated("", ""), "Unknown event type")
+  }
 }
 ```
 
-## Examples
+#### `publish`
 
-### Basic Usage with Memory Store
+Manually publish an event to distributed query subscribers:
 
 ```gleam
-import eventsourcing/memory_store
-import eventsourcing/glyn_store
-
-// Set up in-memory store
-let events_name = process.new_name("events_actor")
-let snapshot_name = process.new_name("snapshot_actor")
-let #(memory_store, memory_spec) = memory_store.supervised(
-  events_name,
-  snapshot_name,
-  static_supervisor.OneForOne
-)
-
-// Add distributed capabilities
-let config = glyn_store.GlynConfig("events", "aggregates")
-let queries = [#(process.new_name("query"), my_query)]
-let #(distributed_store, glyn_spec) = glyn_store.supervised(
-  config,
-  memory_store,
-  queries
-)
+pub fn publish(
+  glyn_store: GlynStore(...),
+  group: String,
+  message: QueryMessage(event),
+) -> Result(Int, eventsourcing.EventSourcingError(error))
 ```
 
 ## Requirements
 
-- **Gleam**: >= 0.52.0
-- **eventsourcing**: >= 9.0.0
-- **glyn**: >= 2.0.0
-- **OTP**: Erlang/OTP 25+
+- Gleam >= 1.0.0
+- Erlang/OTP >= 25.0
+- Services must be running as distributed Erlang nodes (same cookie)
 
-## Development
+## Contributing
 
-```sh
-gleam test  # Run the tests
-gleam build # Build the project
-```
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License.
-
-## Related Packages
-
-- [eventsourcing](https://hex.pm/packages/eventsourcing) - Core event sourcing library
-- [glyn](https://hex.pm/packages/glyn) - Type-safe PubSub and Registry for Gleam
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

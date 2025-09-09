@@ -467,7 +467,7 @@ pub fn subscriber_management_test() {
 
   // Check that there are no subscribers initially
   let glyn_store = eventsourcing_glyn.get_glyn_store(glyn_eventstore_empty)
-  let subscribers_empty = eventsourcing_glyn.get_subscribers(glyn_store)
+  let subscribers_empty = eventsourcing_glyn.subscribers(glyn_store)
   subscribers_empty == []
 }
 
