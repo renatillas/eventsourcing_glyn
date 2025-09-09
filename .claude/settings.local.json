@@ -3,7 +3,8 @@
     "allow": [
       "Bash(gleam test:*)",
       "Bash(gleam build:*)",
-      "WebFetch(domain:hexdocs.pm)"
+      "WebFetch(domain:hexdocs.pm)",
+      "Bash(gleam run:*)"
     ],
     "deny": [],
     "ask": []
