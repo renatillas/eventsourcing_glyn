@@ -635,15 +635,18 @@ pub fn memory_store_event_envelop_decoder_test() {
 
   let envelop_data =
     eventsourcing.MemoryStoreEventEnvelop(
-      "test-123",
+      "user_123",
       1,
-      example_bank_account.AccountOpened("test-123"),
-      [],
+      example_bank_account.AccountOpened("user_123"),
+      [#("user_id", "user_123")],
     )
     |> cast
 
   let assert Ok(envelop) = decode.run(envelop_data, decoder)
-  assert envelop.aggregate_id == "test-123" && envelop.sequence == 1
+  assert envelop.aggregate_id == "user_123"
+    && envelop.sequence == 1
+    && envelop.payload == example_bank_account.AccountOpened("user_123")
+    && envelop.metadata == []
 }
 
 pub fn serialized_event_envelop_decoder_test() {
@@ -657,7 +660,7 @@ pub fn serialized_event_envelop_decoder_test() {
       "test_456",
       2,
       example_bank_account.AccountOpened("test-456"),
-      [],
+      [#("user_id", "user_123")],
       "BankAccountEvent",
       "1.0",
       "BankAccount",
@@ -668,6 +671,7 @@ pub fn serialized_event_envelop_decoder_test() {
   envelop.aggregate_id == "test-456"
   && envelop.sequence == 2
   && envelop.payload == example_bank_account.AccountOpened("test-456")
+  && envelop.metadata == [#("user_id", "user_123")]
 }
 
 pub fn metadata_decoder_test() {
