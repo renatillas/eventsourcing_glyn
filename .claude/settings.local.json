@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gleam test:*)",
+      "Bash(gleam build:*)",
+      "WebFetch(domain:hexdocs.pm)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

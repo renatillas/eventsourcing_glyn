@@ -1,5 +1,7 @@
 import gleam/dynamic/decode
 import gleam/erlang/process
+import gleam/int
+import gleam/io
 import gleam/list
 import gleam/option.{type Option}
 import gleam/otp/actor
@@ -7,7 +9,6 @@ import gleam/otp/static_supervisor
 import gleam/otp/supervision
 import gleam/result
 import glyn/pubsub
-import glyn/registry
 
 import eventsourcing.{
   type Aggregate, type AggregateId, type EventEnvelop, type EventSourcingError,
@@ -25,8 +26,8 @@ pub opaque type GlynStore(
   transaction_handle,
 ) {
   GlynStore(
-    pubsub_topic: String,
-    registry_scope: String,
+    pubsub_scope: String,
+    pubsub_group: String,
     glyn_instances: GlynInstances(event),
     underlying_store: eventsourcing.EventStore(
       underlying_store,
@@ -41,15 +42,12 @@ pub opaque type GlynStore(
 
 /// Configuration for Glyn-based distributed event sourcing
 pub type GlynConfig {
-  GlynConfig(pubsub_topic: String, registry_scope: String)
+  GlynConfig(pubsub_scope: String, pubsub_group: String)
 }
 
 /// Internal type to wrap Glyn PubSub and Registry instances
 pub opaque type GlynInstances(event) {
-  GlynInstances(
-    pubsub: pubsub.PubSub(QueryMessage(event)),
-    registry: registry.Registry(QueryMessage(event), Nil),
-  )
+  GlynInstances(pubsub: pubsub.PubSub(QueryMessage(event)))
 }
 
 /// Creates a Glyn-enhanced event store that wraps an existing event store
@@ -118,22 +116,17 @@ pub fn supervised(
 
   let glyn_pubsub =
     pubsub.new(
-      config.pubsub_topic,
+      config.pubsub_scope,
       message_decoder,
       ProcessEvents(aggregate_id: "error", events: []),
     )
-  let glyn_registry =
-    registry.new(
-      config.registry_scope,
-      message_decoder,
-      ProcessEvents("error", []),
-    )
-  let glyn_instances = GlynInstances(glyn_pubsub, glyn_registry)
+
+  let glyn_instances = GlynInstances(glyn_pubsub)
 
   let glyn_store =
     GlynStore(
-      pubsub_topic: config.pubsub_topic,
-      registry_scope: config.registry_scope,
+      pubsub_scope: config.pubsub_scope,
+      pubsub_group: config.pubsub_group,
       glyn_instances: glyn_instances,
       underlying_store: underlying_store,
     )
@@ -142,7 +135,12 @@ pub fn supervised(
     list.map(queries, fn(query_def) {
       let #(query_name, query_fn) = query_def
       supervision.worker(fn() {
-        start_glyn_query_actor(glyn_instances, query_name, query_fn)
+        start_glyn_query_actor(
+          glyn_instances,
+          query_name,
+          query_fn,
+          config.pubsub_group,
+        )
       })
     })
 
@@ -183,6 +181,34 @@ pub fn supervised(
   Ok(#(eventstore, supervisor_spec))
 }
 
+/// Extract GlynStore from EventStore wrapper
+pub fn get_glyn_store(
+  eventstore: eventsourcing.EventStore(
+    GlynStore(
+      underlying_store,
+      entity,
+      command,
+      event,
+      error,
+      transaction_handle,
+    ),
+    entity,
+    command,
+    event,
+    error,
+    transaction_handle,
+  ),
+) -> GlynStore(
+  underlying_store,
+  entity,
+  command,
+  event,
+  error,
+  transaction_handle,
+) {
+  eventstore.eventstore
+}
+
 @internal
 pub fn serialized_event_envelop_decoder(event_decoder) {
   use aggregate_id <- decode.field(1, decode.string)
@@ -208,13 +234,14 @@ pub fn memory_store_event_envelop_decoder(event_decoder) {
   use aggregate_id <- decode.field(1, decode.string)
   use sequence <- decode.field(2, decode.int)
   use payload <- decode.field(3, event_decoder)
-  use metadata <- decode.field(4, decode.list(metadata_decoder()))
-  decode.success(eventsourcing.MemoryStoreEventEnvelop(
-    aggregate_id:,
-    sequence:,
-    payload:,
-    metadata:,
-  ))
+  decode.success(
+    eventsourcing.MemoryStoreEventEnvelop(
+      aggregate_id: aggregate_id,
+      sequence: sequence,
+      payload:,
+      metadata: [],
+    ),
+  )
 }
 
 @internal
@@ -245,29 +272,39 @@ fn glyn_commit_events(
   events: List(event),
   metadata: List(#(String, String)),
 ) -> Result(#(List(EventEnvelop(event)), Int), EventSourcingError(error)) {
-  // For now, return a placeholder result - this would be implemented properly 
-  // by calling the underlying store using the correct transaction pattern
-  // In a production implementation, you'd need to:
-  // 1. Correctly unwrap the transaction handle for the underlying store
-  // 2. Call the underlying store's commit_events 
-  // 3. Process the result and publish to Glyn PubSub
   use #(events, version) <- result.try(
     glyn_store.underlying_store.commit_events(tx, aggregate, events, metadata),
   )
 
-  // Placeholder publish to Glyn PubSub
   use _ <- result.try(
-    publish_to_glyn_pubsub(
-      glyn_store.glyn_instances,
-      aggregate.aggregate_id,
-      events,
-    )
+    publish_to_glyn_pubsub(glyn_store, aggregate.aggregate_id, events)
     |> result.map_error(fn(_e) {
       eventsourcing.EventStoreError("Failed to publish to Glyn PubSub")
     }),
   )
 
   Ok(#(events, version))
+}
+
+/// Publish an event to Glyn PubSub for distribution to all query subscribers
+fn publish_to_glyn_pubsub(
+  glyn_instances: GlynStore(
+    underlying_store,
+    entity,
+    command,
+    event,
+    error,
+    transaction_handle,
+  ),
+  aggregate_id: AggregateId,
+  events: List(EventEnvelop(event)),
+) -> Result(Int, pubsub.PubSubError) {
+  let message = ProcessEvents(aggregate_id, events)
+  pubsub.publish(
+    glyn_instances.glyn_instances.pubsub,
+    glyn_instances.pubsub_group,
+    message,
+  )
 }
 
 // Proxy functions that delegate to the underlying event store
@@ -388,15 +425,15 @@ pub fn start_glyn_query_actor(
   glyn_instances: GlynInstances(event),
   query_name: process.Name(QueryMessage(event)),
   query_fn: Query(event),
+  pubsub_group: String,
 ) -> actor.StartResult(process.Subject(QueryMessage(event))) {
   use started_actor <- result.map(
     actor.new_with_initialiser(500, fn(subject) {
       let subscription_selector =
-        pubsub.subscribe(glyn_instances.pubsub, "events")
+        pubsub.subscribe(glyn_instances.pubsub, pubsub_group)
 
       let selector =
         process.new_selector()
-        |> process.select(subject)
         |> process.merge_selector(subscription_selector)
 
       actor.initialised(subject)
@@ -407,6 +444,12 @@ pub fn start_glyn_query_actor(
     |> actor.on_message(fn(state, message) {
       case message {
         ProcessEvents(aggregate_id, events) -> {
+          io.println(
+            "📥 Query actor received "
+            <> int.to_string(list.length(events))
+            <> " events for aggregate: "
+            <> aggregate_id,
+          )
           query_fn(aggregate_id, events)
           actor.continue(state)
         }
@@ -419,12 +462,28 @@ pub fn start_glyn_query_actor(
   started_actor
 }
 
-/// Publish an event to Glyn PubSub for distribution to all query subscribers
-fn publish_to_glyn_pubsub(
-  glyn_instances: GlynInstances(event),
-  aggregate_id: AggregateId,
-  events: List(EventEnvelop(event)),
-) -> Result(Int, pubsub.PubSubError) {
-  let message = ProcessEvents(aggregate_id, events)
-  pubsub.publish(glyn_instances.pubsub, "events", message)
+pub fn get_pubsub(
+  glyn_store: GlynStore(
+    underlying_store,
+    entity,
+    command,
+    event,
+    error,
+    transaction_handle,
+  ),
+) -> pubsub.PubSub(QueryMessage(event)) {
+  glyn_store.glyn_instances.pubsub
+}
+
+pub fn get_subscribers(
+  glyn_store: GlynStore(
+    underlying_store,
+    entity,
+    command,
+    event,
+    error,
+    transaction_handle,
+  ),
+) {
+  pubsub.subscribers(glyn_store.glyn_instances.pubsub, glyn_store.pubsub_scope)
 }
