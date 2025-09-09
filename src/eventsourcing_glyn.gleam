@@ -210,7 +210,9 @@ pub fn get_glyn_store(
 }
 
 @internal
-pub fn serialized_event_envelop_decoder(event_decoder) {
+pub fn serialized_event_envelop_decoder(
+  event_decoder: decode.Decoder(a),
+) -> decode.Decoder(EventEnvelop(a)) {
   use aggregate_id <- decode.field(1, decode.string)
   use sequence <- decode.field(2, decode.int)
   use payload <- decode.field(3, event_decoder)
@@ -222,7 +224,7 @@ pub fn serialized_event_envelop_decoder(event_decoder) {
     aggregate_id:,
     sequence:,
     payload:,
-    metadata:,
+    metadata: metadata,
     event_type:,
     event_version:,
     aggregate_type:,
@@ -230,7 +232,9 @@ pub fn serialized_event_envelop_decoder(event_decoder) {
 }
 
 @internal
-pub fn memory_store_event_envelop_decoder(event_decoder) {
+pub fn memory_store_event_envelop_decoder(
+  event_decoder: decode.Decoder(event),
+) -> decode.Decoder(EventEnvelop(event)) {
   use aggregate_id <- decode.field(1, decode.string)
   use sequence <- decode.field(2, decode.int)
   use payload <- decode.field(3, event_decoder)
@@ -245,14 +249,16 @@ pub fn memory_store_event_envelop_decoder(event_decoder) {
 }
 
 @internal
-pub fn payload_decoder(event_decoder) {
+pub fn payload_decoder(
+  event_decoder: decode.Decoder(event),
+) -> decode.Decoder(EventEnvelop(event)) {
   decode.one_of(memory_store_event_envelop_decoder(event_decoder), or: [
     serialized_event_envelop_decoder(event_decoder),
   ])
 }
 
 @internal
-pub fn metadata_decoder() {
+pub fn metadata_decoder() -> decode.Decoder(#(String, String)) {
   use key <- decode.field(0, decode.string)
   use value <- decode.field(1, decode.string)
   decode.success(#(key, value))

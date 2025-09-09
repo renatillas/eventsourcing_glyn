@@ -1,10 +1,11 @@
 import eventsourcing
 import eventsourcing/memory_store
 import example_bank_account
+import gleam/dynamic
+import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/float
 import gleam/int
-import gleam/json
 import gleam/list
 import gleam/option
 import gleam/otp/static_supervisor
@@ -235,12 +236,7 @@ pub fn multiple_scopes_isolation_test() {
     process.receive(query_results_a, 1000)
 
   // scope_b should not receive anything
-  case process.receive(query_results_b, 500) {
-    Ok(_) -> False
-    // Should not receive anything
-    Error(_) -> True
-    // Timeout is expected
-  }
+  let assert Error(Nil) = process.receive(query_results_b, 500)
 }
 
 pub fn glyn_store_test() {
@@ -429,7 +425,8 @@ pub fn pubsub_publishing_test() {
     "publish-test-001",
     example_bank_account.DepositMoney(100.0),
   )
-  let assert Ok(#("deposited", "100.0")) = process.receive(publish_results, 1000)
+  let assert Ok(#("deposited", "100.0")) =
+    process.receive(publish_results, 1000)
 
   eventsourcing.execute(
     eventsourcing,
@@ -548,8 +545,6 @@ pub fn query_actor_error_handling_test() {
   )
   let assert Ok(#("error-test-001", 1, "processed")) =
     process.receive(error_results, 1000)
-
-  True
 }
 
 pub fn cross_aggregate_communication_test() {
@@ -630,82 +625,58 @@ pub fn cross_aggregate_communication_test() {
   )
   let assert Ok(#("cross-test-002", 1)) =
     process.receive(communication_results, 1000)
-
-  // Both should receive their respective events
-  True
 }
 
 pub fn memory_store_event_envelop_decoder_test() {
   let decoder =
     eventsourcing_glyn.memory_store_event_envelop_decoder(
-      example_bank_account.event_decoder(),
+      example_bank_account.event_decoder_gleam(),
     )
 
-  let event_data =
-    json.object([
-      #("event-type", json.string("account-opened")),
-      #("account-id", json.string("test-123")),
-    ])
-
   let envelop_data =
-    json.object([
-      #("1", json.string("test-123")),
-      #("2", json.int(1)),
-      #("3", event_data),
-      #("4", json.array([], json.object)),
-    ])
+    eventsourcing.MemoryStoreEventEnvelop(
+      "test-123",
+      1,
+      example_bank_account.AccountOpened("test-123"),
+      [],
+    )
+    |> cast
 
-  case json.parse(json.to_string(envelop_data), decoder) {
-    Ok(envelop) -> {
-      envelop.aggregate_id == "test-123" && envelop.sequence == 1
-    }
-    Error(_) -> False
-  }
+  let assert Ok(envelop) = decode.run(envelop_data, decoder)
+  assert envelop.aggregate_id == "test-123" && envelop.sequence == 1
 }
 
 pub fn serialized_event_envelop_decoder_test() {
   let decoder =
     eventsourcing_glyn.serialized_event_envelop_decoder(
-      example_bank_account.event_decoder(),
+      example_bank_account.event_decoder_gleam(),
     )
 
-  let event_data =
-    json.object([
-      #("event-type", json.string("account-opened")),
-      #("account-id", json.string("test-456")),
-    ])
-
   let envelop_data =
-    json.object([
-      #("1", json.string("test-456")),
-      #("2", json.int(2)),
-      #("3", event_data),
-      #("4", json.array([], json.object)),
-      #("5", json.string("BankAccountEvent")),
-      #("6", json.string("1.0")),
-      #("7", json.string("BankAccount")),
-    ])
+    eventsourcing.SerializedEventEnvelop(
+      "test_456",
+      2,
+      example_bank_account.AccountOpened("test-456"),
+      [],
+      "BankAccountEvent",
+      "1.0",
+      "BankAccount",
+    )
+    |> cast
 
-  case json.parse(json.to_string(envelop_data), decoder) {
-    Ok(envelop) -> {
-      envelop.aggregate_id == "test-456"
-      && envelop.sequence == 2
-      && envelop.payload == example_bank_account.AccountOpened("test-456")
-    }
-    Error(_) -> False
-  }
+  let assert Ok(envelop) = decode.run(envelop_data, decoder)
+  envelop.aggregate_id == "test-456"
+  && envelop.sequence == 2
+  && envelop.payload == example_bank_account.AccountOpened("test-456")
 }
 
 pub fn metadata_decoder_test() {
   let decoder = eventsourcing_glyn.metadata_decoder()
   let metadata_data =
-    json.object([
-      #("0", json.string("user_id")),
-      #("1", json.string("user_123")),
-    ])
+    dynamic.array([dynamic.string("user_id"), dynamic.string("user_123")])
 
-  case json.parse(json.to_string(metadata_data), decoder) {
-    Ok(#(key, value)) -> key == "user_id" && value == "user_123"
-    Error(_) -> False
-  }
+  let assert Ok(#("user_id", "user_123")) = decode.run(metadata_data, decoder)
 }
+
+@external(erlang, "gleam_stdlib", "identity")
+fn cast(a: anything) -> dynamic.Dynamic
