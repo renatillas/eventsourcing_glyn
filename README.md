@@ -72,20 +72,45 @@ eventsourcing.execute(command_processor, aggregate_id, command)
 
 The library wraps your existing event store with a `GlynStore` that adds distributed capabilities:
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Service A     │    │   Service B     │    │   Service C     │
-│                 │    │                 │    │                 │
-│ ┌─────────────┐ │    │ ┌─────────────┐ │    │ ┌─────────────┐ │
-│ │ Query Actor │ │    │ │ Query Actor │ │    │ │ Query Actor │ │
-│ └─────────────┘ │    │ └─────────────┘ │    │ └─────────────┘ │
-│        │        │    │        │        │    │        │        │
-└────────┼────────┘    └────────┼────────┘    └────────┼────────┘
-         │                      │                      │
-    ┌────┴──────────────────────┴──────────────────────┴────┐
-    │               Glyn PubSub Network                     │
-    │          (Automatic Event Distribution)               │
-    └───────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph "Service A @ node_a"
+        SA[Event Store]
+        QA1[Balance Query]
+        QA2[Audit Query]
+    end
+    
+    subgraph "Service B @ node_b"
+        SB[Event Store]
+        QB1[Transaction Query]
+        QB2[Notification Query]
+    end
+    
+    subgraph "Service C @ node_c"
+        SC[Event Store]
+        QC1[Reporting Query]
+        QC2[Analytics Query]
+    end
+    
+    subgraph "Glyn PubSub Network"
+        PS[Distributed Event Bus]
+    end
+    
+    SA --> PS
+    SB --> PS
+    SC --> PS
+    
+    PS --> QA1
+    PS --> QA2
+    PS --> QB1
+    PS --> QB2
+    PS --> QC1
+    PS --> QC2
+    
+    style PS fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    style SA fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    style SB fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    style SC fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
 ```
 
 When events are committed to any service, they're automatically broadcast to all query actors across all connected nodes.
